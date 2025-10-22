@@ -1,0 +1,17 @@
+{
+  "name": "playgroup-data",
+  "version": "1.0.0",
+  "description": "",
+  "main": "data-scraper.js",
+  "scripts": {
+    "start": "node data-scraper.js",
+    "analyze": "node analyze-data.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "playwright": "^1.56.1"
+  }
+}
