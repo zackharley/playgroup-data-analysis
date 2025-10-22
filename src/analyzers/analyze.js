@@ -2,6 +2,10 @@ const fs = require('fs').promises;
 const path = require('path');
 const { parseTimeToSeconds } = require('../utils/helpers');
 const { analyzeGames } = require('./game-analyzer');
+const {
+  classifyAllDecks,
+  analyzeBracketDistribution,
+} = require('./bracket-classifier');
 
 const DATA_DIR = path.join(__dirname, '../../data');
 
@@ -485,6 +489,115 @@ function generateMarkdownReport(insights) {
     });
   }
 
+  // Bracket Classification Section
+  if (insights.bracketClassifications && insights.bracketAnalysis) {
+    md += '\n---\n\n';
+    md += '# Commander Bracket Classification\n\n';
+    md +=
+      '**[→ View Detailed Bracket Classifications (all decks with full reasoning)](./bracket-details.md)**\n\n';
+
+    const ba = insights.bracketAnalysis;
+
+    // Overall distribution
+    md += '## Bracket Distribution\n\n';
+    md += '| Bracket | Name | Count | Percentage |\n';
+    md += '|---------|------|-------|------------|\n';
+    const bracketNames = {
+      2: 'Core',
+      3: 'Upgraded',
+      4: 'Optimized',
+    };
+    // Note: Brackets 1 (Exhibition) and 5 (cEDH) are disabled
+    // Range is 2-4 for regular casual-to-high-power Commander
+    for (let i = 2; i <= 4; i++) {
+      const count = ba.summary[`bracket${i}`];
+      const pct = ((count / ba.summary.totalDecks) * 100).toFixed(1);
+      md += `| ${i} | ${bracketNames[i]} | ${count} | ${pct}% |\n`;
+    }
+    md += '\n';
+
+    // Confidence distribution
+    md += '## Classification Confidence\n\n';
+    md += '| Confidence | Count | Percentage |\n';
+    md += '|------------|-------|------------|\n';
+    ['High', 'Medium', 'Low'].forEach((conf) => {
+      const count = ba.summary[`${conf.toLowerCase()}Confidence`];
+      const pct = ((count / ba.summary.totalDecks) * 100).toFixed(1);
+      md += `| ${conf} | ${count} | ${pct}% |\n`;
+    });
+    md += '\n';
+
+    // Player bracket analysis
+    if (ba.playerBracketAvg.length > 0) {
+      md += '## Player Bracket Tendencies\n\n';
+      md +=
+        '| Rank | Player | Avg Bracket | Bracket 2 | Bracket 3 | Bracket 4 |\n';
+      md +=
+        '|------|--------|-------------|-----------|-----------|----------|\n';
+      ba.playerBracketAvg.forEach((p, i) => {
+        md += `| ${i + 1} | ${p.pilot} | ${p.avgBracket.toFixed(2)} | ${
+          p.distribution[2]
+        } | ${p.distribution[3]} | ${p.distribution[4]} |\n`;
+      });
+      md += '\n';
+    }
+
+    // Bracket 4 decks (Optimized) - highest power level we classify
+    if (ba.byBracket[4] && ba.byBracket[4].length > 0) {
+      md += '## Bracket 4: Optimized Decks (Highest Power)\n\n';
+      md +=
+        '| Commander | Pilot | Confidence | ELO | Avg Win Turn | Win Rate |\n';
+      md +=
+        '|-----------|-------|------------|-----|--------------|----------|\n';
+      ba.byBracket[4].forEach((c) => {
+        md += `| ${c.commander} | ${c.pilot} | ${c.confidence} | ${c.elo} | ${
+          c.metrics.avgWinTurn > 0 ? c.metrics.avgWinTurn.toFixed(2) : 'N/A'
+        } | ${(c.metrics.winRate * 100).toFixed(1)}% |\n`;
+      });
+      md += '\n';
+    }
+
+    // Full classification table (top 30 by ELO)
+    md += '## Full Deck Classifications (Top 30 by ELO)\n\n';
+    md +=
+      '| Rank | Commander | Pilot | Bracket | Confidence | ELO | Win Turn | Win Rate |\n';
+    md +=
+      '|------|-----------|-------|---------|------------|-----|----------|----------|\n';
+    const sortedByElo = [...insights.bracketClassifications].sort(
+      (a, b) => b.elo - a.elo
+    );
+    sortedByElo.slice(0, 30).forEach((c, i) => {
+      md += `| ${i + 1} | ${c.commander} | ${c.pilot} | ${c.bracket} | ${
+        c.confidence
+      } | ${c.elo} | ${
+        c.metrics.avgWinTurn > 0 ? c.metrics.avgWinTurn.toFixed(2) : 'N/A'
+      } | ${(c.metrics.winRate * 100).toFixed(1)}% |\n`;
+    });
+    md += '\n';
+
+    // Borderline/Low confidence cases for review
+    const borderlineCases = insights.bracketClassifications.filter(
+      (c) => c.confidence === 'Low' || c.confidence === 'Medium'
+    );
+    if (borderlineCases.length > 0) {
+      md += '## Borderline Cases Requiring Review\n\n';
+      md +=
+        'These decks have Medium or Low confidence classifications and may benefit from more games or manual review.\n\n';
+      md +=
+        '| Commander | Pilot | Bracket | Confidence | Games | Primary Reason |\n';
+      md +=
+        '|-----------|-------|---------|------------|-------|----------------|\n';
+      borderlineCases.slice(0, 20).forEach((c) => {
+        const primaryReason = c.reasoning[0] || 'Limited data';
+        md += `| ${c.commander} | ${c.pilot} | ${c.bracket} | ${c.confidence} | ${c.metrics.games} | ${primaryReason} |\n`;
+      });
+      md += '\n';
+    }
+
+    md +=
+      '*For full reasoning, metrics, and confidence levels for all decks, see [bracket-details.md](./bracket-details.md)*\n\n';
+  }
+
   // Game Analysis Section
   if (insights.gameAnalysis) {
     md += '\n---\n\n';
@@ -733,6 +846,134 @@ function generateMarkdownReport(insights) {
   return md;
 }
 
+// Generate detailed bracket classification report
+function generateBracketDetailsReport(classifications, analysis) {
+  let md = '# Commander Bracket Classification - Detailed Report\n\n';
+  md += `Generated: ${new Date().toLocaleString()}\n\n`;
+  md += `**[← Back to Main Report](./report.md)**\n\n`;
+
+  md += '## Overview\n\n';
+  md += `This report contains detailed bracket classifications for all ${classifications.length} decks, including:\n`;
+  md += '- Full reasoning for each bracket assignment\n';
+  md += '- Confidence levels and what they mean\n';
+  md += '- Complete metrics breakdown\n';
+  md += '- Win condition analysis\n\n';
+
+  // Summary stats
+  md += '## Summary Statistics\n\n';
+  md += '| Bracket | Name | Count | Percentage |\n';
+  md += '|---------|------|-------|------------|\n';
+  const bracketNames = { 2: 'Core', 3: 'Upgraded', 4: 'Optimized' };
+  for (let i = 2; i <= 4; i++) {
+    const count = analysis.summary[`bracket${i}`];
+    const pct = ((count / analysis.summary.totalDecks) * 100).toFixed(1);
+    md += `| ${i} | ${bracketNames[i]} | ${count} | ${pct}% |\n`;
+  }
+  md += '\n';
+
+  md += '**Confidence Distribution:**\n';
+  md += `- High Confidence: ${analysis.summary.highConfidence} decks (${(
+    (analysis.summary.highConfidence / analysis.summary.totalDecks) *
+    100
+  ).toFixed(1)}%)\n`;
+  md += `- Medium Confidence: ${analysis.summary.mediumConfidence} decks (${(
+    (analysis.summary.mediumConfidence / analysis.summary.totalDecks) *
+    100
+  ).toFixed(1)}%)\n`;
+  md += `- Low Confidence: ${analysis.summary.lowConfidence} decks (${(
+    (analysis.summary.lowConfidence / analysis.summary.totalDecks) *
+    100
+  ).toFixed(1)}%)\n\n`;
+
+  // Confidence level explanations
+  md += '## Understanding Confidence Levels\n\n';
+  md +=
+    '**High Confidence**: 8+ games played with clear, consistent metrics. These classifications are reliable.\n\n';
+  md +=
+    '**Medium Confidence**: 5-7 games played OR borderline metrics between brackets. May shift with more data.\n\n';
+  md +=
+    '**Low Confidence**: <5 games played OR contradictory signals. Treat as preliminary estimates.\n\n';
+
+  md += '---\n\n';
+
+  // Bracket 4 decks (if any)
+  const bracket4Decks = classifications.filter((c) => c.bracket === 4);
+  if (bracket4Decks.length > 0) {
+    md += '## Bracket 4: Optimized (Highest Power)\n\n';
+    bracket4Decks
+      .sort((a, b) => b.elo - a.elo)
+      .forEach((deck) => {
+        md += generateDeckDetailSection(deck);
+      });
+  }
+
+  // Bracket 3 decks
+  const bracket3Decks = classifications.filter((c) => c.bracket === 3);
+  if (bracket3Decks.length > 0) {
+    md += '## Bracket 3: Upgraded\n\n';
+    bracket3Decks
+      .sort((a, b) => b.elo - a.elo)
+      .forEach((deck) => {
+        md += generateDeckDetailSection(deck);
+      });
+  }
+
+  // Bracket 2 decks
+  const bracket2Decks = classifications.filter((c) => c.bracket === 2);
+  if (bracket2Decks.length > 0) {
+    md += '## Bracket 2: Core\n\n';
+    bracket2Decks
+      .sort((a, b) => b.elo - a.elo)
+      .forEach((deck) => {
+        md += generateDeckDetailSection(deck);
+      });
+  }
+
+  return md;
+}
+
+// Helper function to generate detailed section for a single deck
+function generateDeckDetailSection(deck) {
+  let md = `### ${deck.commander} (${deck.pilot})\n\n`;
+
+  // Header info
+  md += `**Bracket:** ${deck.bracket} | **Confidence:** ${deck.confidence} | **ELO:** ${deck.elo}\n\n`;
+
+  // Reasoning
+  md += '**Classification Reasoning:**\n\n';
+  deck.reasoning.forEach((reason) => {
+    md += `- ${reason}\n`;
+  });
+  md += '\n';
+
+  // Key Metrics
+  md += '**Key Metrics:**\n\n';
+  md += '| Metric | Value |\n';
+  md += '|--------|-------|\n';
+  md += `| Games Played | ${deck.metrics.games} |\n`;
+  md += `| Win Rate | ${(deck.metrics.winRate * 100).toFixed(1)}% |\n`;
+  md += `| Avg Win Turn | ${
+    deck.metrics.avgWinTurn > 0 ? deck.metrics.avgWinTurn.toFixed(2) : 'N/A'
+  } |\n`;
+  md += `| Avg Game Rounds | ${deck.metrics.avgGameRounds.toFixed(1)} |\n`;
+  md += `| Kills Per Game | ${deck.metrics.avgKillsPerGame.toFixed(2)} |\n`;
+  md += `| Damage Per Game | ${deck.metrics.avgDamagePerGame.toFixed(1)} |\n`;
+  md += `| Primary Win Condition | ${deck.metrics.primaryWinCondition} |\n`;
+  if (deck.metrics.comboWins > 0) {
+    md += `| Combo Wins | ${deck.metrics.comboWins} (${deck.metrics.infiniteWins} infinite) |\n`;
+  }
+  md += '\n';
+
+  // Deck link
+  if (deck.link) {
+    md += `[View Deck on Playgroup.gg](${deck.link})\n\n`;
+  }
+
+  md += '---\n\n';
+
+  return md;
+}
+
 async function analyze() {
   console.log('Loading data...');
   const deckDataPath = path.join(DATA_DIR, 'playgroup-data.json');
@@ -748,15 +989,22 @@ async function analyze() {
 
   // Load and analyze games if available
   let gameAnalysis = null;
+  let bracketClassifications = null;
+  let bracketAnalysis = null;
   const gamesDataPath = path.join(DATA_DIR, 'games.json');
   try {
     const gamesRawData = await fs.readFile(gamesDataPath, 'utf-8');
     const games = JSON.parse(gamesRawData);
     console.log(`Analyzing ${games.length} games...`);
     gameAnalysis = analyzeGames(games);
+
+    // Classify decks into brackets
+    console.log(`Classifying ${decks.length} decks into brackets...`);
+    bracketClassifications = classifyAllDecks(decks, games);
+    bracketAnalysis = analyzeBracketDistribution(bracketClassifications);
   } catch (error) {
     console.log('Error loading/analyzing games:', error.message);
-    console.log('Skipping game analysis...');
+    console.log('Skipping game analysis and bracket classification...');
   }
 
   // Summary stats
@@ -779,6 +1027,8 @@ async function analyze() {
     commanderMeta,
     playstylePatterns,
     gameAnalysis,
+    bracketClassifications,
+    bracketAnalysis,
     allDecks: decks, // Include raw data for report generation
   };
 
@@ -794,6 +1044,18 @@ async function analyze() {
   const reportPath = path.join(DATA_DIR, 'report.md');
   await fs.writeFile(reportPath, report);
   console.log(`Report saved to ${reportPath}`);
+
+  // Generate detailed bracket classification report
+  if (bracketClassifications) {
+    console.log('Generating detailed bracket report...');
+    const bracketReport = generateBracketDetailsReport(
+      bracketClassifications,
+      bracketAnalysis
+    );
+    const bracketReportPath = path.join(DATA_DIR, 'bracket-details.md');
+    await fs.writeFile(bracketReportPath, bracketReport);
+    console.log(`Bracket details saved to ${bracketReportPath}`);
+  }
 
   // Print summary to console
   console.log('\n=== SUMMARY ===');
@@ -877,6 +1139,62 @@ async function analyze() {
           top.totalDamage
         } total damage (${top.avgDamagePerGame.toFixed(1)} avg/game)`
       );
+    }
+  }
+
+  // Bracket Classification Summary
+  if (bracketAnalysis) {
+    console.log('\n=== BRACKET CLASSIFICATION ===');
+    console.log(
+      `Total Decks Classified: ${bracketAnalysis.summary.totalDecks}`
+    );
+    console.log(`\nBracket Distribution:`);
+    const bracketNames = {
+      2: 'Core',
+      3: 'Upgraded',
+      4: 'Optimized',
+    };
+    // Note: Brackets 1 (Exhibition) and 5 (cEDH) are disabled
+    // Range is 2-4 for regular casual-to-high-power Commander
+    for (let i = 2; i <= 4; i++) {
+      const count = bracketAnalysis.summary[`bracket${i}`];
+      const pct = ((count / bracketAnalysis.summary.totalDecks) * 100).toFixed(
+        1
+      );
+      console.log(
+        `  Bracket ${i} (${bracketNames[i]}): ${count} decks (${pct}%)`
+      );
+    }
+    console.log(`\nConfidence Distribution:`);
+    console.log(
+      `  High: ${bracketAnalysis.summary.highConfidence} decks (${(
+        (bracketAnalysis.summary.highConfidence /
+          bracketAnalysis.summary.totalDecks) *
+        100
+      ).toFixed(1)}%)`
+    );
+    console.log(
+      `  Medium: ${bracketAnalysis.summary.mediumConfidence} decks (${(
+        (bracketAnalysis.summary.mediumConfidence /
+          bracketAnalysis.summary.totalDecks) *
+        100
+      ).toFixed(1)}%)`
+    );
+    console.log(
+      `  Low: ${bracketAnalysis.summary.lowConfidence} decks (${(
+        (bracketAnalysis.summary.lowConfidence /
+          bracketAnalysis.summary.totalDecks) *
+        100
+      ).toFixed(1)}%)`
+    );
+
+    if (bracketAnalysis.playerBracketAvg.length > 0) {
+      console.log(`\nTop 3 Players by Average Bracket:`);
+      bracketAnalysis.playerBracketAvg.slice(0, 3).forEach((p, i) => {
+        console.log(
+          `  ${i + 1}. ${p.pilot}: Avg Bracket ${p.avgBracket.toFixed(2)}`
+        );
+      });
     }
   }
 
