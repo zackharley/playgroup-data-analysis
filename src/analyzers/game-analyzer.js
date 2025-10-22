@@ -381,23 +381,30 @@ function analyzeDamagePatterns(games) {
   const playerDamageStats = {};
   const biggestSwings = [];
 
+  // Helper to ensure player stats exists
+  const ensurePlayerStats = (playerName) => {
+    if (!playerDamageStats[playerName]) {
+      playerDamageStats[playerName] = {
+        totalDamage: 0,
+        commanderDamage: 0,
+        gamesPlayed: new Set(),
+        maxSingleGame: 0,
+        gameDetails: [], // Track individual game damages
+      };
+    }
+  };
+
   games.forEach((game) => {
     // Extract from highlights
     if (game.highlights?.mostDamage) {
       const player = normalizeName(game.highlights.mostDamage.player);
-      if (!playerDamageStats[player]) {
-        playerDamageStats[player] = {
-          totalDamage: 0,
-          games: 0,
-          maxSingleGame: 0,
-        };
-      }
-      playerDamageStats[player].totalDamage +=
-        game.highlights.mostDamage.amount || 0;
-      playerDamageStats[player].games++;
+      ensurePlayerStats(player);
+
+      const amount = game.highlights.mostDamage.amount || 0;
+      playerDamageStats[player].gameDetails.push(amount);
       playerDamageStats[player].maxSingleGame = Math.max(
         playerDamageStats[player].maxSingleGame,
-        game.highlights.mostDamage.amount || 0
+        amount
       );
     }
 
@@ -415,14 +422,7 @@ function analyzeDamagePatterns(games) {
     if (game.damageMatrices?.total && game.players) {
       game.players.forEach((player, i) => {
         const playerName = normalizeName(player.playerName);
-        if (!playerDamageStats[playerName]) {
-          playerDamageStats[playerName] = {
-            totalDamage: 0,
-            commanderDamage: 0,
-            games: 0,
-            maxSingleGame: 0,
-          };
-        }
+        ensurePlayerStats(playerName);
 
         // Sum damage dealt to all opponents
         const totalDamageDealt =
@@ -433,11 +433,27 @@ function analyzeDamagePatterns(games) {
             0
           ) || 0;
 
+        // Always count the game if player was in it
+        playerDamageStats[playerName].gamesPlayed.add(game.gameId);
+
         if (totalDamageDealt > 0) {
+          // Track this game's damage in details (for filtering infinite later)
+          if (
+            !playerDamageStats[playerName].gameDetails.includes(
+              totalDamageDealt
+            )
+          ) {
+            playerDamageStats[playerName].gameDetails.push(totalDamageDealt);
+          }
+
           playerDamageStats[playerName].totalDamage += totalDamageDealt;
           playerDamageStats[playerName].commanderDamage =
             (playerDamageStats[playerName].commanderDamage || 0) +
             commanderDamageDealt;
+          playerDamageStats[playerName].maxSingleGame = Math.max(
+            playerDamageStats[playerName].maxSingleGame,
+            totalDamageDealt
+          );
         }
       });
     }
@@ -445,17 +461,45 @@ function analyzeDamagePatterns(games) {
 
   // Calculate efficiency
   const damageEfficiency = Object.entries(playerDamageStats).map(
-    ([player, stats]) => ({
-      player,
-      totalDamage: stats.totalDamage,
-      avgDamagePerGame: stats.games > 0 ? stats.totalDamage / stats.games : 0,
-      maxSingleGame: stats.maxSingleGame,
-      commanderDamagePct:
-        stats.totalDamage > 0
-          ? ((stats.commanderDamage || 0) / stats.totalDamage) * 100
-          : 0,
-      games: stats.games,
-    })
+    ([player, stats]) => {
+      // Count unique games played
+      const gamesPlayed = stats.gamesPlayed
+        ? stats.gamesPlayed.size
+        : stats.games || 0;
+
+      // Check if player has infinite damage
+      const hasInfinite = stats.maxSingleGame > 1000000;
+
+      // For totals/averages, filter out infinite games from gameDetails
+      const nonInfiniteGames = (stats.gameDetails || []).filter(
+        (dmg) => dmg < 1000000
+      );
+      const totalDamageNonInfinite = nonInfiniteGames.reduce(
+        (sum, dmg) => sum + dmg,
+        0
+      );
+      const gamesCountNonInfinite = nonInfiniteGames.length;
+
+      // Commander damage calculation (proportional to non-infinite games)
+      const commanderDamageNonInfinite = stats.commanderDamage || 0;
+
+      return {
+        player,
+        totalDamage: totalDamageNonInfinite,
+        avgDamagePerGame:
+          gamesCountNonInfinite > 0
+            ? totalDamageNonInfinite / gamesCountNonInfinite
+            : 0,
+        maxSingleGame: stats.maxSingleGame,
+        commanderDamagePct:
+          totalDamageNonInfinite > 0
+            ? (commanderDamageNonInfinite / totalDamageNonInfinite) * 100
+            : 0,
+        games: gamesPlayed,
+        gamesCountedForAvg: gamesCountNonInfinite,
+        hasInfinite,
+      };
+    }
   );
 
   damageEfficiency.sort((a, b) => b.totalDamage - a.totalDamage);

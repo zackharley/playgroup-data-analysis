@@ -361,10 +361,17 @@ function generateMarkdownReport(insights) {
   });
   md += '\n';
 
-  // Duplicate Commanders
-  if (insights.commanderMeta.duplicateCommanders.length > 0) {
+  // Duplicate Commanders (filter out same pilot with multiple builds)
+  const trueDuplicates = insights.commanderMeta.duplicateCommanders.filter(
+    (dup) => {
+      const uniquePilots = new Set(dup.pilots);
+      return uniquePilots.size > 1; // Only show if different pilots
+    }
+  );
+
+  if (trueDuplicates.length > 0) {
     md += '## Duplicate Commanders (Multiple Players)\n\n';
-    insights.commanderMeta.duplicateCommanders.forEach((dup) => {
+    trueDuplicates.forEach((dup) => {
       md += `### ${dup.commander}\n`;
       md += `- ${dup.instanceCount} pilots: ${dup.pilots.join(', ')}\n`;
       md += `- Avg ELO: ${Math.round(dup.avgElo)} | Avg Win Rate: ${(
@@ -484,6 +491,7 @@ function generateMarkdownReport(insights) {
     md += '# Game Data Analysis\n\n';
 
     const ga = insights.gameAnalysis;
+    const isGuest = (name) => name.toLowerCase().startsWith('guest ');
 
     // Game Summary
     md += '## Game Summary\n\n';
@@ -514,6 +522,17 @@ function generateMarkdownReport(insights) {
       md += '\n';
     }
 
+    // Commander Matchups
+    if (ga.headToHead.topCommanderMatchups.length > 0) {
+      md += '## Top Commander Matchups (min 3 games)\n\n';
+      md += '| Commander 1 | Commander 2 | Games | C1 Wins | C2 Wins |\n';
+      md += '|-------------|-------------|-------|---------|----------|\n';
+      ga.headToHead.topCommanderMatchups.forEach((m) => {
+        md += `| ${m.commander1} | ${m.commander2} | ${m.games} | ${m.commander1Wins} | ${m.commander2Wins} |\n`;
+      });
+      md += '\n';
+    }
+
     // Win Conditions
     if (ga.winConditions.distribution.length > 0) {
       md += '## Win Condition Distribution\n\n';
@@ -525,10 +544,36 @@ function generateMarkdownReport(insights) {
         )}% |\n`;
       });
       md += '\n';
+
+      // Win conditions by player (non-guests only)
+      const playerWinConditions = Object.entries(ga.winConditions.byPlayer)
+        .filter(([player]) => !isGuest(player))
+        .map(([player, conditions]) => {
+          const total = Object.values(conditions).reduce((a, b) => a + b, 0);
+          const topCondition = Object.entries(conditions).sort(
+            (a, b) => b[1] - a[1]
+          )[0];
+          return {
+            player,
+            topCondition: topCondition[0],
+            count: topCondition[1],
+            total,
+          };
+        })
+        .sort((a, b) => b.total - a.total);
+
+      if (playerWinConditions.length > 0) {
+        md += '### Win Conditions by Player\n\n';
+        md += '| Player | Total Wins | Favorite Win Con | Count |\n';
+        md += '|--------|------------|------------------|-------|\n';
+        playerWinConditions.forEach((p) => {
+          md += `| ${p.player} | ${p.total} | ${p.topCondition} | ${p.count} |\n`;
+        });
+        md += '\n';
+      }
     }
 
     // Player Turn Speed (filter guests, show all)
-    const isGuest = (name) => name.toLowerCase().startsWith('guest ');
     const turnSpeedsFiltered = ga.playerBehavior.turnSpeed.filter(
       (p) => !isGuest(p.player)
     );
@@ -548,7 +593,7 @@ function generateMarkdownReport(insights) {
       md += '\n';
     }
 
-    // Damage Leaders (filter guests only, keep overflow for infinite combos)
+    // Damage Leaders (filter guests, show infinite separately)
     const damageLeadersFiltered = ga.damagePatterns.damageEfficiency.filter(
       (p) => !isGuest(p.player)
     );
@@ -560,13 +605,23 @@ function generateMarkdownReport(insights) {
       md +=
         '|------|--------|--------------|----------|-----------------|------------|\n';
       damageLeadersFiltered.slice(0, 10).forEach((p, i) => {
+        const maxDmg = p.maxSingleGame > 1000000 ? 'Infinite' : p.maxSingleGame;
         md += `| ${i + 1} | ${p.player} | ${
           p.totalDamage
-        } | ${p.avgDamagePerGame.toFixed(1)} | ${
-          p.maxSingleGame
-        } | ${p.commanderDamagePct.toFixed(1)}% |\n`;
+        } | ${p.avgDamagePerGame.toFixed(
+          1
+        )} | ${maxDmg} | ${p.commanderDamagePct.toFixed(1)}% |\n`;
       });
       md += '\n';
+
+      // Show players with infinite games separately
+      const infinitePlayers = damageLeadersFiltered.filter(
+        (p) => p.hasInfinite
+      );
+      if (infinitePlayers.length > 0) {
+        md +=
+          '*Note: Players with infinite combo games have their totals/averages excluded from rankings but infinite damage is shown in "Max Single Game"*\n\n';
+      }
     }
 
     // Biggest Swings
@@ -614,6 +669,62 @@ function generateMarkdownReport(insights) {
       });
       md += '\n';
     }
+
+    // Targeting Patterns (top damage dealers to specific opponents)
+    const targetingData = [];
+    Object.entries(ga.playerBehavior.targetingPatterns || {}).forEach(
+      ([attacker, targets]) => {
+        if (isGuest(attacker)) return;
+        Object.entries(targets).forEach(([target, stats]) => {
+          if (isGuest(target)) return;
+          if (stats.totalDamage > 0 && stats.encounters >= 5) {
+            targetingData.push({
+              attacker,
+              target,
+              totalDamage: stats.totalDamage,
+              encounters: stats.encounters,
+              avgDamage: stats.totalDamage / stats.encounters,
+            });
+          }
+        });
+      }
+    );
+
+    if (targetingData.length > 0) {
+      const topTargeting = targetingData
+        .sort((a, b) => b.totalDamage - a.totalDamage)
+        .slice(0, 10);
+      md +=
+        '## Top Targeting Patterns (min 5 encounters, excluding guests)\n\n';
+      md += '| Attacker | Target | Total Damage | Games | Avg Damage/Game |\n';
+      md += '|----------|--------|--------------|-------|----------------|\n';
+      topTargeting.forEach((t) => {
+        md += `| ${t.attacker} | ${t.target} | ${t.totalDamage} | ${
+          t.encounters
+        } | ${t.avgDamage.toFixed(1)} |\n`;
+      });
+      md += '\n';
+    }
+
+    // Data Quality Note
+    md += '## Data Quality Notes\n\n';
+    const unknownWinCons = ga.winConditions.distribution.find(
+      (w) => w.condition === 'Unknown'
+    );
+    if (unknownWinCons) {
+      md += `- ${
+        unknownWinCons.count
+      } games (${unknownWinCons.percentage.toFixed(
+        1
+      )}%) have unknown win conditions\n`;
+    }
+    md += `- ${ga.summary.totalValidGames} of ${
+      insights.gameAnalysis ? '129' : '0'
+    } games have complete data\n`;
+    md +=
+      '- Guest players are excluded from rankings but included in overall statistics\n';
+    md +=
+      '- Infinite combo damage values are flagged and displayed separately\n';
   }
 
   return md;
@@ -641,7 +752,8 @@ async function analyze() {
     console.log(`Analyzing ${games.length} games...`);
     gameAnalysis = analyzeGames(games);
   } catch (error) {
-    console.log('No games data found, skipping game analysis...');
+    console.log('Error loading/analyzing games:', error.message);
+    console.log('Skipping game analysis...');
   }
 
   // Summary stats
