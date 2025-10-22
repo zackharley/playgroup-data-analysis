@@ -273,10 +273,7 @@ function analyzePlayerBehavior(games) {
     moodsByPlayer,
     moodsByOutcome,
     playerMoodProfiles,
-    turnSpeed: {
-      fastest: avgTurnTimes.slice(0, 5),
-      slowest: avgTurnTimes.slice(-5).reverse(),
-    },
+    turnSpeed: avgTurnTimes, // Return all players, already sorted fastest to slowest
     targetingPatterns,
   };
 }

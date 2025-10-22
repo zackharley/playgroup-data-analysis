@@ -527,43 +527,28 @@ function generateMarkdownReport(insights) {
       md += '\n';
     }
 
-    // Player Turn Speed (filter guests)
+    // Player Turn Speed (filter guests, show all)
     const isGuest = (name) => name.toLowerCase().startsWith('guest ');
-    const fastestNonGuests = ga.playerBehavior.turnSpeed.fastest.filter(
-      (p) => !isGuest(p.player)
-    );
-    const slowestNonGuests = ga.playerBehavior.turnSpeed.slowest.filter(
+    const turnSpeedsFiltered = ga.playerBehavior.turnSpeed.filter(
       (p) => !isGuest(p.player)
     );
 
-    if (fastestNonGuests.length > 0) {
-      md += '## Player Turn Speed\n\n';
-      md += '### Fastest Players (excluding guests)\n\n';
-      md += '| Player | Avg Turn Time | Games |\n';
-      md += '|--------|---------------|-------|\n';
-      fastestNonGuests.slice(0, 5).forEach((p) => {
+    if (turnSpeedsFiltered.length > 0) {
+      md += '## Player Turn Speed (excluding guests)\n\n';
+      md += '| Rank | Player | Avg Turn Time | Games |\n';
+      md += '|------|--------|---------------|-------|\n';
+      turnSpeedsFiltered.forEach((p, i) => {
         const mins = Math.floor(p.avgTurnSeconds / 60);
         const secs = Math.floor(p.avgTurnSeconds % 60);
-        md += `| ${p.player} | ${mins}:${String(secs).padStart(2, '0')} | ${
-          p.games
-        } |\n`;
-      });
-      md += '\n';
-
-      md += '### Slowest Players (excluding guests)\n\n';
-      md += '| Player | Avg Turn Time | Games |\n';
-      md += '|--------|---------------|-------|\n';
-      slowestNonGuests.slice(0, 5).forEach((p) => {
-        const mins = Math.floor(p.avgTurnSeconds / 60);
-        const secs = Math.floor(p.avgTurnSeconds % 60);
-        md += `| ${p.player} | ${mins}:${String(secs).padStart(2, '0')} | ${
-          p.games
-        } |\n`;
+        md += `| ${i + 1} | ${p.player} | ${mins}:${String(secs).padStart(
+          2,
+          '0'
+        )} | ${p.games} |\n`;
       });
       md += '\n';
     }
 
-    // Damage Leaders (filter guests and bad data)
+    // Damage Leaders (filter guests only, keep overflow for infinite combos)
     const damageLeadersFiltered = ga.damagePatterns.damageEfficiency.filter(
       (p) => !isGuest(p.player)
     );
@@ -769,13 +754,9 @@ async function analyze() {
       );
     }
 
-    const validDamageLeaders =
-      gameAnalysis.damagePatterns.damageEfficiency.filter(
-        (p) => p.totalDamage < 1000000
-      );
-    if (validDamageLeaders.length > 0) {
+    if (gameAnalysis.damagePatterns.damageEfficiency.length > 0) {
       console.log(`\nTop Damage Dealer:`);
-      const top = validDamageLeaders[0];
+      const top = gameAnalysis.damagePatterns.damageEfficiency[0];
       console.log(
         `  ${top.player}: ${
           top.totalDamage
