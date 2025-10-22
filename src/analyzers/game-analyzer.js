@@ -10,6 +10,42 @@ function isGuest(playerName) {
   return normalizeName(playerName).startsWith('guest ');
 }
 
+// Parse mood into score (1-5) and salt level
+function parseMood(moodString) {
+  const moodLower = moodString.toLowerCase();
+
+  // Determine base mood score (1-5)
+  let moodScore = 3; // default to indifferent
+  let baseMood = 'Indifferent';
+
+  if (moodLower.includes('very disappointed')) {
+    moodScore = 1;
+    baseMood = 'Very disappointed';
+  } else if (moodLower.includes('disappointed')) {
+    moodScore = 2;
+    baseMood = 'Disappointed';
+  } else if (moodLower.includes('indifferent')) {
+    moodScore = 3;
+    baseMood = 'Indifferent';
+  } else if (moodLower.includes('excited')) {
+    moodScore = 4;
+    baseMood = 'Excited';
+  } else if (moodLower.includes('happy')) {
+    moodScore = 5;
+    baseMood = 'Happy';
+  }
+
+  // Determine salt level
+  let saltLevel = 'none';
+  if (moodLower.includes('extremely salty')) {
+    saltLevel = 'extremely';
+  } else if (moodLower.includes('somewhat salty')) {
+    saltLevel = 'somewhat';
+  }
+
+  return { moodScore, baseMood, saltLevel, original: moodString };
+}
+
 // 1. Head-to-Head Analysis
 function analyzeHeadToHead(games) {
   const playerVsPlayer = {};
@@ -188,23 +224,59 @@ function analyzeWinConditions(games) {
 // 3. Player Behavior Analysis
 function analyzePlayerBehavior(games) {
   const moodsByPlayer = {};
+  const moodScoresByPlayer = {};
+  const saltByPlayer = {};
+  const saltByOutcome = { winner: {}, eliminated: {} };
   const moodsByOutcome = { winner: {}, eliminated: {} };
   const turnTimes = {};
   const targetingPatterns = {};
 
   games.forEach((game) => {
+    const winner = game.players?.find((p) => p.result === 'winner');
+
     game.players?.forEach((player) => {
       const playerName = normalizeName(player.playerName);
-      const mood = player.mood || 'Unknown';
+      const moodRaw = player.mood || 'Unknown';
 
-      // Moods by player
-      if (!moodsByPlayer[playerName]) moodsByPlayer[playerName] = {};
-      moodsByPlayer[playerName][mood] =
-        (moodsByPlayer[playerName][mood] || 0) + 1;
+      if (moodRaw === 'Unknown') return; // Skip unknown moods
 
-      // Moods by outcome
+      const parsed = parseMood(moodRaw);
       const outcome = player.result === 'winner' ? 'winner' : 'eliminated';
-      moodsByOutcome[outcome][mood] = (moodsByOutcome[outcome][mood] || 0) + 1;
+
+      // Track mood scores (1-5)
+      if (!moodScoresByPlayer[playerName]) moodScoresByPlayer[playerName] = [];
+      moodScoresByPlayer[playerName].push(parsed.moodScore);
+
+      // Track base moods by player
+      if (!moodsByPlayer[playerName]) moodsByPlayer[playerName] = {};
+      moodsByPlayer[playerName][parsed.baseMood] =
+        (moodsByPlayer[playerName][parsed.baseMood] || 0) + 1;
+
+      // Track moods by outcome
+      moodsByOutcome[outcome][parsed.baseMood] =
+        (moodsByOutcome[outcome][parsed.baseMood] || 0) + 1;
+
+      // Track salt levels
+      if (parsed.saltLevel !== 'none') {
+        if (!saltByPlayer[playerName]) {
+          saltByPlayer[playerName] = {
+            totalGames: 0,
+            somewhat: 0,
+            extremely: 0,
+          };
+        }
+        saltByPlayer[playerName].totalGames++;
+        if (parsed.saltLevel === 'somewhat')
+          saltByPlayer[playerName].somewhat++;
+        if (parsed.saltLevel === 'extremely')
+          saltByPlayer[playerName].extremely++;
+
+        // Salt by outcome
+        if (!saltByOutcome[outcome][parsed.saltLevel]) {
+          saltByOutcome[outcome][parsed.saltLevel] = 0;
+        }
+        saltByOutcome[outcome][parsed.saltLevel]++;
+      }
 
       // Turn times
       if (player.avgTurn && player.avgTurn !== '00:00') {
@@ -249,7 +321,27 @@ function analyzePlayerBehavior(games) {
 
   avgTurnTimes.sort((a, b) => a.avgTurnSeconds - b.avgTurnSeconds);
 
-  // Most common moods per player
+  // Calculate average mood scores (1-5 scale)
+  const avgMoodScores = Object.entries(moodScoresByPlayer)
+    .map(([player, scores]) => ({
+      player,
+      avgMoodScore: scores.reduce((a, b) => a + b, 0) / scores.length,
+      gamesWithMood: scores.length,
+    }))
+    .sort((a, b) => b.avgMoodScore - a.avgMoodScore);
+
+  // Calculate salt statistics
+  const saltStats = Object.entries(saltByPlayer)
+    .map(([player, stats]) => ({
+      player,
+      totalSaltyGames: stats.totalGames,
+      somewhatSalty: stats.somewhat,
+      extremelySalty: stats.extremely,
+      saltRate: stats.totalGames / (moodScoresByPlayer[player]?.length || 1), // % of games with salt
+    }))
+    .sort((a, b) => b.saltRate - a.saltRate);
+
+  // Most common base moods per player
   const playerMoodProfiles = Object.entries(moodsByPlayer).map(
     ([player, moods]) => {
       const total = Object.values(moods).reduce((a, b) => a + b, 0);
@@ -272,6 +364,11 @@ function analyzePlayerBehavior(games) {
   return {
     moodsByPlayer,
     moodsByOutcome,
+    moodScoresByPlayer,
+    avgMoodScores,
+    saltByPlayer,
+    saltByOutcome,
+    saltStats,
     playerMoodProfiles,
     turnSpeed: avgTurnTimes, // Return all players, already sorted fastest to slowest
     targetingPatterns,
@@ -287,8 +384,6 @@ function analyzeGameMeta(games) {
   const durations = [];
   const rounds = [];
   const funRatings = [];
-  const funByPlayer = {};
-  const funByCommander = {};
 
   validGames.forEach((game) => {
     if (game.metadata.duration) {
@@ -299,18 +394,6 @@ function analyzeGameMeta(games) {
     }
     if (game.metadata.avgFun && game.metadata.avgFun > 0) {
       funRatings.push(game.metadata.avgFun);
-
-      // Fun by player
-      game.players?.forEach((player) => {
-        const playerName = normalizeName(player.playerName);
-        if (!funByPlayer[playerName]) funByPlayer[playerName] = [];
-        funByPlayer[playerName].push(game.metadata.avgFun);
-
-        // Fun by commander
-        const commander = player.commander;
-        if (!funByCommander[commander]) funByCommander[commander] = [];
-        funByCommander[commander].push(game.metadata.avgFun);
-      });
     }
   });
 
@@ -340,25 +423,6 @@ function analyzeGameMeta(games) {
     roundsDistribution[r] = (roundsDistribution[r] || 0) + 1;
   });
 
-  // Fun by player averages
-  const avgFunByPlayer = Object.entries(funByPlayer)
-    .map(([player, ratings]) => ({
-      player,
-      avgFun: ratings.reduce((a, b) => a + b, 0) / ratings.length,
-      games: ratings.length,
-    }))
-    .sort((a, b) => b.avgFun - a.avgFun);
-
-  // Fun by commander averages (min 3 games)
-  const avgFunByCommander = Object.entries(funByCommander)
-    .filter(([, ratings]) => ratings.length >= 3)
-    .map(([commander, ratings]) => ({
-      commander,
-      avgFun: ratings.reduce((a, b) => a + b, 0) / ratings.length,
-      games: ratings.length,
-    }))
-    .sort((a, b) => b.avgFun - a.avgFun);
-
   return {
     summary: {
       totalValidGames: validGames.length,
@@ -371,8 +435,6 @@ function analyzeGameMeta(games) {
     },
     durationVsRounds,
     roundsDistribution,
-    avgFunByPlayer,
-    avgFunByCommander,
   };
 }
 

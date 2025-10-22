@@ -637,35 +637,38 @@ function generateMarkdownReport(insights) {
       md += '\n';
     }
 
-    // Fun Ratings (filter guests)
-    const funRatingsFiltered = ga.gameMeta.avgFunByPlayer.filter(
+    // Average Mood Scores (filter guests)
+    const avgMoodFiltered = ga.playerBehavior.avgMoodScores.filter(
       (p) => !isGuest(p.player)
     );
-    if (funRatingsFiltered.length > 0) {
-      md +=
-        '## Most Fun Players (by average game fun rating, excluding guests)\n\n';
-      md += '| Player | Avg Fun Rating | Games |\n';
-      md += '|--------|----------------|-------|\n';
-      funRatingsFiltered.forEach((p) => {
-        md += `| ${p.player} | ${p.avgFun.toFixed(2)}/5 | ${p.games} |\n`;
+    if (avgMoodFiltered.length > 0) {
+      md += '## Average Player Mood (1-5 scale, excluding guests)\n\n';
+      md += '| Rank | Player | Avg Mood Score | Games |\n';
+      md += '|------|--------|----------------|-------|\n';
+      avgMoodFiltered.forEach((p, i) => {
+        md += `| ${i + 1} | ${p.player} | ${p.avgMoodScore.toFixed(2)}/5 | ${
+          p.gamesWithMood
+        } |\n`;
       });
       md += '\n';
+      md +=
+        '*Mood Scale: 1=Very disappointed, 2=Disappointed, 3=Indifferent, 4=Excited, 5=Happy*\n\n';
     }
 
-    // Player Moods (filter guests)
-    const moodProfilesFiltered = ga.playerBehavior.playerMoodProfiles.filter(
-      (p) => !isGuest(p.player)
+    // Salt Analysis (filter guests)
+    const saltStatsFiltered = ga.playerBehavior.saltStats.filter(
+      (p) => !isGuest(p.player) && p.totalSaltyGames > 0
     );
-    if (moodProfilesFiltered.length > 0) {
-      md += '## Player Mood Profiles (excluding guests)\n\n';
-      md += '| Player | Most Common Mood | Distribution |\n';
-      md += '|--------|------------------|-------------|\n';
-      moodProfilesFiltered.forEach((p) => {
-        const topMoods = p.moodDistribution
-          .slice(0, 2)
-          .map((m) => `${m.mood} (${m.percentage.toFixed(0)}%)`)
-          .join(', ');
-        md += `| ${p.player} | ${p.mostCommonMood} | ${topMoods} |\n`;
+    if (saltStatsFiltered.length > 0) {
+      md += '## Salt Analysis (excluding guests)\n\n';
+      md +=
+        '| Rank | Player | Salty Games | Somewhat | Extremely | Salt Rate |\n';
+      md +=
+        '|------|--------|-------------|----------|-----------|----------|\n';
+      saltStatsFiltered.forEach((p, i) => {
+        md += `| ${i + 1} | ${p.player} | ${p.totalSaltyGames} | ${
+          p.somewhatSalty
+        } | ${p.extremelySalty} | ${(p.saltRate * 100).toFixed(1)}% |\n`;
       });
       md += '\n';
     }
