@@ -4,8 +4,10 @@
   "description": "",
   "main": "data-scraper.js",
   "scripts": {
-    "start": "node data-scraper.js",
-    "analyze": "node analyze-data.js"
+    "scrape": "node src/main.js",
+    "scrape:decks": "node src/scrapers/deck-scraper.js",
+    "scrape:games": "node src/scrapers/game-scraper.js",
+    "analyze": "node src/analyzers/analyze.js"
   },
   "keywords": [],
   "author": "",

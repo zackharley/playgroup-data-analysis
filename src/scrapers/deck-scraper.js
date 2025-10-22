@@ -1,14 +1,4 @@
-const { chromium } = require('playwright');
-const fs = require('fs').promises;
-const path = require('path');
-
-require('dotenv').config();
-
-const USERNAME = process.env.USERNAME;
-const PASSWORD = process.env.PASSWORD;
-const PLAYGROUP_URL = process.env.PLAYGROUP_URL;
-
-const DATA_DIR = path.join(__dirname, 'data');
+const { login } = require('./auth');
 
 async function getDeckData(page) {
   return await page.evaluate(() => {
@@ -74,10 +64,20 @@ async function getDecks(page) {
     const decks = [];
 
     for (const deckLinkElement of deckLinkElements) {
-      const innerText = deckLinkElement.innerText;
-      const [, rank, commander, pilot, elo] = innerText.match(
-        /^(\d+)\.\s(.+)\n\n(.+)\n(\d+)$/
-      );
+      // Extract rank and commander from the <p> tag
+      const commanderText = deckLinkElement.querySelector('p').innerText.trim();
+      const [, rank, commander] = commanderText.match(/^(\d+)\.\s+(.+)$/);
+
+      // Extract pilot from the pilot div
+      const pilot = deckLinkElement
+        .querySelector('.text-sm.text-on-surface_variant')
+        .innerText.trim();
+
+      // Extract ELO from the last div
+      const elo = deckLinkElement
+        .querySelector('.text-2xs.flex-none')
+        .innerText.trim();
+
       const deck = {
         commander,
         pilot,
@@ -91,74 +91,68 @@ async function getDecks(page) {
   });
 }
 
-async function login(page) {
-  console.log('Filling in login credentials...');
-  await page.fill('#user_email', USERNAME);
-  await page.fill('#user_password', PASSWORD);
+async function scrapeDeckData(page, playgroupUrl) {
+  console.log('Navigating to playgroup...');
+  await page.goto(playgroupUrl, { waitUntil: 'domcontentloaded' });
 
-  console.log('Submitting login form...');
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-    page.click('input[type="submit"][value="Sign In"]'),
-  ]);
+  console.log('Getting deck leaderboard...');
+  const decks = await getDecks(page);
+  console.log(`Found ${decks.length} decks`);
 
-  console.log('Login complete!');
-}
+  const allData = [];
 
-async function main() {
-  const browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext();
-  const page = await context.newPage();
-
-  try {
-    console.log('Navigating to playgroup...');
-    await page.goto(PLAYGROUP_URL, { waitUntil: 'domcontentloaded' });
-
-    if (USERNAME && PASSWORD) {
-      console.log('Logging in...');
-      await login(page);
-    } else {
-      console.log('No credentials provided, skipping login...');
-    }
-
-    console.log('Getting deck leaderboard...');
-    const decks = await getDecks(page);
-    console.log(`Found ${decks.length} decks`);
-
-    const allData = [];
-
-    for (let i = 0; i < decks.length; i++) {
-      const deck = decks[i];
-      console.log(
-        `[${i + 1}/${decks.length}] Processing ${deck.commander} by ${
-          deck.pilot
-        }...`
-      );
-
-      await page.goto(deck.link, { waitUntil: 'domcontentloaded' });
-
-      const deckData = await getDeckData(page);
-      allData.push({
-        ...deck,
-        ...deckData,
-      });
-    }
-
-    console.log('Saving data to playgroup-data.json...');
-    await fs.mkdir(DATA_DIR, { recursive: true });
-    await fs.writeFile(
-      path.join(DATA_DIR, 'playgroup-data.json'),
-      JSON.stringify(allData, null, 2)
+  for (let i = 0; i < decks.length; i++) {
+    const deck = decks[i];
+    console.log(
+      `[${i + 1}/${decks.length}] Processing ${deck.commander} by ${
+        deck.pilot
+      }...`
     );
-    console.log('Done!');
 
-    return allData;
-  } catch (error) {
-    console.error('Error:', error);
-    throw error;
-  } finally {
-    await browser.close();
+    await page.goto(deck.link, { waitUntil: 'domcontentloaded' });
+
+    const deckData = await getDeckData(page);
+    allData.push({
+      ...deck,
+      ...deckData,
+    });
   }
+
+  return allData;
 }
 
-main();
+module.exports = {
+  scrapeDeckData,
+};
+
+// Allow standalone execution
+if (require.main === module) {
+  const { chromium } = require('playwright');
+  const fs = require('fs').promises;
+  const path = require('path');
+  require('dotenv').config();
+
+  const PLAYGROUP_URL = process.env.PLAYGROUP_URL;
+  const DATA_DIR = path.join(__dirname, '../../data');
+
+  (async () => {
+    const browser = await chromium.launch({ headless: false });
+    const page = await browser.newPage();
+
+    try {
+      await page.goto(PLAYGROUP_URL, { waitUntil: 'domcontentloaded' });
+      await login(page);
+
+      const decks = await scrapeDeckData(page, PLAYGROUP_URL);
+
+      await fs.mkdir(DATA_DIR, { recursive: true });
+      await fs.writeFile(
+        path.join(DATA_DIR, 'playgroup-data.json'),
+        JSON.stringify(decks, null, 2)
+      );
+      console.log(`Saved ${decks.length} decks`);
+    } finally {
+      await browser.close();
+    }
+  })();
+}

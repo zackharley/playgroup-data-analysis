@@ -1,13 +1,9 @@
 const fs = require('fs').promises;
 const path = require('path');
+const { parseTimeToSeconds } = require('../utils/helpers');
+const { analyzeGames } = require('./game-analyzer');
 
-const DATA_DIR = path.join(__dirname, 'data');
-
-// Helper function to parse time string "MM:SS" to seconds
-function parseTimeToSeconds(timeStr) {
-  const [minutes, seconds] = timeStr.split(':').map(Number);
-  return minutes * 60 + seconds;
-}
+const DATA_DIR = path.join(__dirname, '../../data');
 
 // Helper function to calculate correlation coefficient
 function correlation(xs, ys) {
@@ -482,21 +478,186 @@ function generateMarkdownReport(insights) {
     });
   }
 
+  // Game Analysis Section
+  if (insights.gameAnalysis) {
+    md += '\n---\n\n';
+    md += '# Game Data Analysis\n\n';
+
+    const ga = insights.gameAnalysis;
+
+    // Game Summary
+    md += '## Game Summary\n\n';
+    md += `- Total games analyzed: ${ga.summary.totalValidGames}\n`;
+    md += `- Average duration: ${ga.summary.avgDuration}\n`;
+    md += `- Average rounds: ${ga.summary.avgRounds}\n`;
+    md += `- Average fun rating: ${ga.summary.avgFunRating}/5\n\n`;
+
+    // Nemesis Pairs
+    if (ga.headToHead.topNemesisPairs.length > 0) {
+      md += '## Top Nemesis Pairs (Who Eliminates Who)\n\n';
+      md += '| Killer | Victim | Eliminations |\n';
+      md += '|--------|--------|-------------|\n';
+      ga.headToHead.topNemesisPairs.forEach((n) => {
+        md += `| ${n.killer} | ${n.victim} | ${n.eliminations} |\n`;
+      });
+      md += '\n';
+    }
+
+    // Frequent Opponents
+    if (ga.headToHead.topFrequentOpponents.length > 0) {
+      md += '## Most Frequent Opponents (Who Plays Together Most)\n\n';
+      md += '| Player 1 | Player 2 | Games Together |\n';
+      md += '|----------|----------|----------------|\n';
+      ga.headToHead.topFrequentOpponents.forEach((o) => {
+        md += `| ${o.player1} | ${o.player2} | ${o.gamesPlayed} |\n`;
+      });
+      md += '\n';
+    }
+
+    // Win Conditions
+    if (ga.winConditions.distribution.length > 0) {
+      md += '## Win Condition Distribution\n\n';
+      md += '| Condition | Count | Percentage |\n';
+      md += '|-----------|-------|------------|\n';
+      ga.winConditions.distribution.forEach((wc) => {
+        md += `| ${wc.condition} | ${wc.count} | ${wc.percentage.toFixed(
+          1
+        )}% |\n`;
+      });
+      md += '\n';
+    }
+
+    // Player Turn Speed (filter guests)
+    const isGuest = (name) => name.toLowerCase().startsWith('guest ');
+    const fastestNonGuests = ga.playerBehavior.turnSpeed.fastest.filter(
+      (p) => !isGuest(p.player)
+    );
+    const slowestNonGuests = ga.playerBehavior.turnSpeed.slowest.filter(
+      (p) => !isGuest(p.player)
+    );
+
+    if (fastestNonGuests.length > 0) {
+      md += '## Player Turn Speed\n\n';
+      md += '### Fastest Players (excluding guests)\n\n';
+      md += '| Player | Avg Turn Time | Games |\n';
+      md += '|--------|---------------|-------|\n';
+      fastestNonGuests.slice(0, 5).forEach((p) => {
+        const mins = Math.floor(p.avgTurnSeconds / 60);
+        const secs = Math.floor(p.avgTurnSeconds % 60);
+        md += `| ${p.player} | ${mins}:${String(secs).padStart(2, '0')} | ${
+          p.games
+        } |\n`;
+      });
+      md += '\n';
+
+      md += '### Slowest Players (excluding guests)\n\n';
+      md += '| Player | Avg Turn Time | Games |\n';
+      md += '|--------|---------------|-------|\n';
+      slowestNonGuests.slice(0, 5).forEach((p) => {
+        const mins = Math.floor(p.avgTurnSeconds / 60);
+        const secs = Math.floor(p.avgTurnSeconds % 60);
+        md += `| ${p.player} | ${mins}:${String(secs).padStart(2, '0')} | ${
+          p.games
+        } |\n`;
+      });
+      md += '\n';
+    }
+
+    // Damage Leaders (filter guests and bad data)
+    const damageLeadersFiltered = ga.damagePatterns.damageEfficiency.filter(
+      (p) => !isGuest(p.player)
+    );
+
+    if (damageLeadersFiltered.length > 0) {
+      md += '## Damage Leaders (excluding guests)\n\n';
+      md +=
+        '| Rank | Player | Total Damage | Avg/Game | Max Single Game | Cmdr Dmg % |\n';
+      md +=
+        '|------|--------|--------------|----------|-----------------|------------|\n';
+      damageLeadersFiltered.slice(0, 10).forEach((p, i) => {
+        md += `| ${i + 1} | ${p.player} | ${
+          p.totalDamage
+        } | ${p.avgDamagePerGame.toFixed(1)} | ${
+          p.maxSingleGame
+        } | ${p.commanderDamagePct.toFixed(1)}% |\n`;
+      });
+      md += '\n';
+    }
+
+    // Biggest Swings
+    if (ga.damagePatterns.topSwings.length > 0) {
+      md += '## Top 10 Biggest Swings\n\n';
+      md += '| Rank | Attacker | Target | Damage | Game | Date |\n';
+      md += '|------|----------|--------|--------|------|------|\n';
+      ga.damagePatterns.topSwings.slice(0, 10).forEach((s, i) => {
+        md += `| ${i + 1} | ${s.attacker} | ${s.target} | ${s.damage} | #${
+          s.gameId
+        } | ${s.date} |\n`;
+      });
+      md += '\n';
+    }
+
+    // Fun Ratings (filter guests)
+    const funRatingsFiltered = ga.gameMeta.avgFunByPlayer.filter(
+      (p) => !isGuest(p.player)
+    );
+    if (funRatingsFiltered.length > 0) {
+      md +=
+        '## Most Fun Players (by average game fun rating, excluding guests)\n\n';
+      md += '| Player | Avg Fun Rating | Games |\n';
+      md += '|--------|----------------|-------|\n';
+      funRatingsFiltered.forEach((p) => {
+        md += `| ${p.player} | ${p.avgFun.toFixed(2)}/5 | ${p.games} |\n`;
+      });
+      md += '\n';
+    }
+
+    // Player Moods (filter guests)
+    const moodProfilesFiltered = ga.playerBehavior.playerMoodProfiles.filter(
+      (p) => !isGuest(p.player)
+    );
+    if (moodProfilesFiltered.length > 0) {
+      md += '## Player Mood Profiles (excluding guests)\n\n';
+      md += '| Player | Most Common Mood | Distribution |\n';
+      md += '|--------|------------------|-------------|\n';
+      moodProfilesFiltered.forEach((p) => {
+        const topMoods = p.moodDistribution
+          .slice(0, 2)
+          .map((m) => `${m.mood} (${m.percentage.toFixed(0)}%)`)
+          .join(', ');
+        md += `| ${p.player} | ${p.mostCommonMood} | ${topMoods} |\n`;
+      });
+      md += '\n';
+    }
+  }
+
   return md;
 }
 
-async function main() {
+async function analyze() {
   console.log('Loading data...');
-  const dataPath = path.join(DATA_DIR, 'playgroup-data.json');
-  const rawData = await fs.readFile(dataPath, 'utf-8');
-  const decks = JSON.parse(rawData);
+  const deckDataPath = path.join(DATA_DIR, 'playgroup-data.json');
+  const deckRawData = await fs.readFile(deckDataPath, 'utf-8');
+  const decks = JSON.parse(deckRawData);
 
   console.log(`Analyzing ${decks.length} decks...`);
 
-  // Run all analyses
+  // Run deck analyses
   const playerPerformance = analyzePlayerPerformance(decks);
   const commanderMeta = analyzeCommanderMeta(decks);
   const playstylePatterns = analyzePlaystylePatterns(decks);
+
+  // Load and analyze games if available
+  let gameAnalysis = null;
+  const gamesDataPath = path.join(DATA_DIR, 'games.json');
+  try {
+    const gamesRawData = await fs.readFile(gamesDataPath, 'utf-8');
+    const games = JSON.parse(gamesRawData);
+    console.log(`Analyzing ${games.length} games...`);
+    gameAnalysis = analyzeGames(games);
+  } catch (error) {
+    console.log('No games data found, skipping game analysis...');
+  }
 
   // Summary stats
   const summary = {
@@ -517,6 +678,7 @@ async function main() {
     playerPerformance,
     commanderMeta,
     playstylePatterns,
+    gameAnalysis,
     allDecks: decks, // Include raw data for report generation
   };
 
@@ -574,7 +736,62 @@ async function main() {
     );
   });
 
+  // Game Analysis Summary
+  if (gameAnalysis) {
+    console.log('\n=== GAME ANALYSIS ===');
+    console.log(`Total Games: ${gameAnalysis.summary.totalValidGames}`);
+    console.log(`Avg Duration: ${gameAnalysis.summary.avgDuration}`);
+    console.log(`Avg Rounds: ${gameAnalysis.summary.avgRounds}`);
+    console.log(`Avg Fun Rating: ${gameAnalysis.summary.avgFunRating}/5`);
+
+    if (gameAnalysis.winConditions.distribution.length > 0) {
+      console.log(`\nWin Condition Distribution:`);
+      gameAnalysis.winConditions.distribution.slice(0, 3).forEach((wc) => {
+        console.log(
+          `  ${wc.condition}: ${wc.count} games (${wc.percentage.toFixed(1)}%)`
+        );
+      });
+    }
+
+    if (gameAnalysis.headToHead.topNemesisPairs.length > 0) {
+      console.log(`\nTop Nemesis Pair:`);
+      const top = gameAnalysis.headToHead.topNemesisPairs[0];
+      console.log(
+        `  ${top.killer} has eliminated ${top.victim} ${top.eliminations} times`
+      );
+    }
+
+    if (gameAnalysis.headToHead.topFrequentOpponents.length > 0) {
+      console.log(`\nMost Frequent Opponents:`);
+      const top = gameAnalysis.headToHead.topFrequentOpponents[0];
+      console.log(
+        `  ${top.player1} & ${top.player2}: ${top.gamesPlayed} games together`
+      );
+    }
+
+    const validDamageLeaders =
+      gameAnalysis.damagePatterns.damageEfficiency.filter(
+        (p) => p.totalDamage < 1000000
+      );
+    if (validDamageLeaders.length > 0) {
+      console.log(`\nTop Damage Dealer:`);
+      const top = validDamageLeaders[0];
+      console.log(
+        `  ${top.player}: ${
+          top.totalDamage
+        } total damage (${top.avgDamagePerGame.toFixed(1)} avg/game)`
+      );
+    }
+  }
+
   console.log('\nAnalysis complete!');
 }
 
-main();
+module.exports = {
+  analyze,
+};
+
+// Allow standalone execution
+if (require.main === module) {
+  analyze();
+}
